@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# Runtime artifacts
+logs/
+screenshots/
+state/signals.json
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
