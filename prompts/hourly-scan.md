@@ -19,11 +19,7 @@ For each symbol in this order:
 
 1. `chart_set_symbol` → symbol
 2. `chart_set_timeframe` → `"60"` (1H)
-3. Ensure indicators are loaded (add via `chart_manage_indicator` with full names if missing):
-   - `"Moving Average Exponential"` × 2 (length 50 and length 200) — use `indicator_set_inputs` to set length if you added defaults
-   - `"Relative Strength Index"` (length 14)
-   - `"MACD"` (12, 26, 9)
-   - `"Average True Range"` (length 14)
+3. Check existing indicators via `chart_get_state`. **Maximum 2 indicators are allowed on this account — do NOT add any indicator if 2 are already present.** Only add a missing indicator if the current count is below 2. After any `chart_manage_indicator` call, immediately press `Escape` via `ui_keyboard` to dismiss any upgrade/limit dialog that may have appeared.
 4. `quote_get` → current price
 5. `data_get_study_values` → grab EMA50, EMA200, RSI(14), MACD line / signal / histogram, ATR(14)
 6. Use `data_get_ohlcv` (summary=true, ~5 bars) to check **the last closed bar's** RSI and MACD vs the prior bar's — needed for the crossover check
@@ -48,16 +44,16 @@ For each symbol in this order:
 - `RSI(14)` on the last closed bar crossed **up through 50** (prior bar RSI < 50 AND last closed RSI >= 50, OR last closed RSI rose from < 45 across the prior 1-2 bars through 50)
 - `MACD histogram` turned **positive** on the last closed bar (prior bar histogram <= 0 AND last closed histogram > 0)
 - Entry = close of the signal (last closed) bar
-- SL = entry − (1.5 × ATR)
-- TP = entry + 2 × (entry − SL)   → fixed RR 2:1
+- SL = entry − (1.0 × ATR)
+- TP = entry + 1.5 × (entry − SL)   → fixed RR 1.5:1
 
 ## Short (mirror)
 - `close < EMA50` AND `EMA50 < EMA200`
 - `RSI(14)` crossed **down through 50** (prior >= 50, last closed < 50, or descending from > 55 through 50)
 - `MACD histogram` turned **negative** on the last closed bar (prior >= 0, last closed < 0)
 - Entry = close of signal bar
-- SL = entry + (1.5 × ATR)
-- TP = entry − 2 × (SL − entry)   → fixed RR 2:1
+- SL = entry + (1.0 × ATR)
+- TP = entry − 1.5 × (SL − entry)   → fixed RR 1.5:1
 
 ## No signal
 Any one condition fails → `"signal": "none"`. Include a short `reason` (which condition failed).
