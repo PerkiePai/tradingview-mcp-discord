@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Oscar hourly 1H signal scanner — yfinance edition. No Claude / MCP needed."""
+"""Oscar hourly 1H signal scanner — yfinance edition."""
 
 import io
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,10 @@ ATR_MULT  = 1.0
 RR        = 1.5
 ST_PERIOD = 10
 ST_MULT   = 2.0
+
+# TradingView symbol names and decimal pricescale (for draw_shape offset math)
+TV_SYMBOL  = {"XAUUSD": "EIGHTCAP:XAUUSD", "BTCUSD": "EIGHTCAP:BTCUSD"}
+PRICESCALE = {"XAUUSD": 100, "BTCUSD": 100}
 
 
 # ---------------------------------------------------------------------------
@@ -103,13 +108,72 @@ def save_cached_df(display: str, df: "pd.DataFrame") -> None:
     )
 
 
-def post_discord(webhook_url: str, embed: dict) -> None:
-    resp = requests.post(
-        webhook_url,
-        json={"embeds": [embed]},
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        timeout=10,
+def capture_chart_screenshot(sig: dict) -> "str | None":
+    """Draw position on TradingView chart via claude -p and return the screenshot path.
+    Returns None if TV is not running or the capture fails."""
+    direction  = sig["signal"]
+    entry      = sig["entry"]
+    sl         = sig["sl"]
+    tp         = sig["tp"]
+    symbol     = sig["symbol"]
+    pricescale = PRICESCALE.get(symbol, 100)
+    tv_sym     = TV_SYMBOL.get(symbol, symbol)
+    now_unix   = int(datetime.now(timezone.utc).timestamp())
+
+    if direction == "long":
+        shape     = "long_position"
+        sl_offset = round((entry - sl) * pricescale)
+        tp_offset = round((tp - entry) * pricescale)
+    else:
+        shape     = "short_position"
+        sl_offset = round((sl - entry) * pricescale)
+        tp_offset = round((entry - tp) * pricescale)
+
+    overrides = json.dumps({"stopLevel": sl_offset, "profitLevel": tp_offset})
+
+    prompt = (
+        f"TradingView MCP — execute these steps exactly, no commentary:\n"
+        f"1. chart_set_symbol symbol=\"{tv_sym}\"\n"
+        f"2. chart_set_timeframe timeframe=\"60\"\n"
+        f"3. draw_shape shape=\"{shape}\" "
+        f"point={{\"time\": {now_unix}, \"price\": {entry}}} "
+        f"overrides='{overrides}'\n"
+        f"4. capture_screenshot region=\"chart\"\n"
+        f"Output ONLY the screenshot file path on a single line. Nothing else."
     )
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=90,
+        )
+        for line in reversed(result.stdout.strip().splitlines()):
+            line = line.strip()
+            if line.lower().endswith((".png", ".jpg", ".jpeg")) and Path(line).exists():
+                return line
+        log(f"{symbol}: screenshot — no valid path in claude output")
+    except Exception as e:
+        log(f"{symbol}: screenshot capture failed — {e}")
+    return None
+
+
+def post_discord(webhook_url: str, embed: dict, screenshot_path: "str | None" = None) -> None:
+    if screenshot_path and Path(screenshot_path).exists():
+        embed = {**embed, "image": {"url": "attachment://screenshot.png"}}
+        with open(screenshot_path, "rb") as img:
+            resp = requests.post(
+                webhook_url,
+                data={"payload_json": json.dumps({"embeds": [embed]})},
+                files={"file": ("screenshot.png", img, "image/png")},
+                timeout=30,
+            )
+    else:
+        resp = requests.post(
+            webhook_url,
+            json={"embeds": [embed]},
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            timeout=10,
+        )
     resp.raise_for_status()
 
 
@@ -266,8 +330,14 @@ def main() -> None:
         embed = build_embed(sig)
         log(f"{display}: POSTING {sig['signal']} entry={sig['entry']} sl={sig['sl']} tp={sig['tp']}")
 
+        screenshot_path = capture_chart_screenshot(sig)
+        if screenshot_path:
+            log(f"{display}: screenshot captured — {screenshot_path}")
+        else:
+            log(f"{display}: posting without screenshot (TV not available or capture failed)")
+
         try:
-            post_discord(webhook_url, embed)
+            post_discord(webhook_url, embed, screenshot_path)
             posted += 1
             state[display] = {
                 "last_direction": sig["signal"],
